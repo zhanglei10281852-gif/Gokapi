@@ -80,7 +80,18 @@ type Database interface {
 	GetSession(id string) (models.Session, bool)
 	// SaveSession stores the given session. After the expiry passed, it will be deleted automatically
 	SaveSession(id string, session models.Session)
-	// DeleteSession deletes a session with the given ID
+	// RotateSession atomically replaces the session oldId with the single successor newId.
+	// If oldId was already rotated, the ID of the existing successor is returned instead.
+	// Returns false if oldId no longer exists (expired or revoked), in which case no
+	// session is created and re-authentication is required. This is atomic across instances.
+	RotateSession(oldId string, newId string, session models.Session) (string, bool)
+	// GetSessionSuccessor follows the rotation record of an ID that has already been
+	// replaced and returns its currently valid successor. Returns false if no valid
+	// successor exists (never rotated, successor revoked or expired).
+	GetSessionSuccessor(oldId string) (string, models.Session, bool)
+	// DeleteSession deletes a session with the given ID. If the session was rotated,
+	// its entire successor chain is deleted as well, so that a logout invalidates
+	// successor sessions created by concurrent renewals.
 	DeleteSession(id string)
 	// DeleteAllSessions logs all users out
 	DeleteAllSessions()

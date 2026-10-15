@@ -1,0 +1,19 @@
+rubrics:
+  - id: 1
+    type: f2p
+    text: 并发命中同一待续期旧会话时，最终最多存在一个有效后继。
+  - id: 2
+    type: f2p
+    text: 轮换后旧 ID 不可再登录，并发响应不会留下多个长期有效的 session 或 cookie。
+  - id: 3
+    type: f2p
+    text: logout 与已经读取旧会话的迟到续期交错后，不存在有效后继或登录复活。
+  - id: 4
+    type: f2p
+    text: 密码变更、用户删除和 DeleteAllSessionsByUser 与续期交错时都阻止后继生效。
+  - id: 5
+    type: f2p
+    text: SQLite 与 Redis 在多实例下提供相同的原子轮换和撤销语义，节点切换可继续验证结果。
+  - id: 6
+    type: p2p
+    text: 未到 RenewAt、已经超过 ValidUntil、OIDC 有效期、既有 cookie 属性与正常登录流程不回归。

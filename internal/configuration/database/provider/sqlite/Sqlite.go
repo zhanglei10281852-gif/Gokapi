@@ -22,7 +22,7 @@ type DatabaseProvider struct {
 }
 
 // DatabaseSchemeVersion contains the version number to be expected from the current database. If lower, an upgrade will be performed
-const DatabaseSchemeVersion = 15
+const DatabaseSchemeVersion = 16
 
 // New returns an instance
 func New(dbConfig models.DbConnection) (DatabaseProvider, error) {
@@ -36,6 +36,17 @@ func (p DatabaseProvider) GetType() int {
 
 // Upgrade migrates the DB to a new Gokapi version, if required
 func (p DatabaseProvider) Upgrade(currentDbVersion int) {
+	// < v2.3.0 - run first, as older upgrade steps delete session data and
+	// already expect the SessionRotations table to exist
+	if currentDbVersion < 16 {
+		err := p.rawSqlite(`CREATE TABLE IF NOT EXISTS "SessionRotations" (
+			"OldId"	TEXT NOT NULL UNIQUE,
+			"NewId"	TEXT NOT NULL,
+			"ValidUntil"	INTEGER NOT NULL,
+			PRIMARY KEY("OldId")
+		) WITHOUT ROWID;`)
+		helper.Check(err)
+	}
 	// < v2.0.0
 	if currentDbVersion < 10 {
 		fmt.Println("Error: Gokapi runs >=v2.0.0, but Database is <v2.0.0. Please update to v2.0.0 first.")
@@ -151,7 +162,7 @@ func (p DatabaseProvider) init(dbConfig models.DbConnection) (DatabaseProvider, 
 				return DatabaseProvider{}, err
 			}
 		}
-		p.sqliteDb, err = sql.Open("sqlite", cleanPath+"?_pragma=busy_timeout=30000&_pragma=journal_mode=WAL")
+		p.sqliteDb, err = sql.Open("sqlite", cleanPath+"?_pragma=busy_timeout=30000&_pragma=journal_mode=WAL&_txlock=immediate")
 		if err != nil {
 			return DatabaseProvider{}, err
 		}
@@ -238,6 +249,12 @@ func (p DatabaseProvider) createNewDatabase() error {
 			"ValidUntil"	INTEGER NOT NULL,
 			"UserId"	INTEGER NOT NULL,
 			PRIMARY KEY("Id")
+		) WITHOUT ROWID;
+		CREATE TABLE "SessionRotations" (
+			"OldId"	TEXT NOT NULL UNIQUE,
+			"NewId"	TEXT NOT NULL,
+			"ValidUntil"	INTEGER NOT NULL,
+			PRIMARY KEY("OldId")
 		) WITHOUT ROWID;
 		CREATE TABLE "Users" (
 			"Id"	INTEGER NOT NULL UNIQUE,

@@ -688,6 +688,27 @@ func TestDatabaseProvider_Upgrade(t *testing.T) {
 	// instance.Upgrade(instance.GetDbVersion())
 	// test.IsEqualInt(t, exitCode, 0)
 
+	// v15 -> v16: the SessionRotations table is created and rotation works
+	exitCode = 0
+	// Remove leftovers from a previous run, as open database files may prevent
+	// test directory cleanup on some platforms
+	instance.DeleteSession("upg_old")
+	test.IsNil(t, instance.rawSqlite(`DROP TABLE IF EXISTS "SessionRotations";`))
+	instance.SetDbVersion(15)
+	instance.Upgrade(15)
+	test.IsEqualInt(t, exitCode, 0)
+	upgradeSession := models.Session{
+		RenewAt:    0,
+		ValidUntil: time.Now().Add(time.Hour).Unix(),
+		UserId:     1,
+	}
+	instance.SaveSession("upg_old", upgradeSession)
+	successor, ok := instance.RotateSession("upg_old", "upg_new", upgradeSession)
+	test.IsEqualBool(t, ok, true)
+	test.IsEqualString(t, successor, "upg_new")
+	_, ok = instance.GetSession("upg_old")
+	test.IsEqualBool(t, ok, false)
+
 }
 
 func TestRawSql(t *testing.T) {

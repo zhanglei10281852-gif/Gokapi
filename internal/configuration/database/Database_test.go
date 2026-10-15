@@ -3,12 +3,14 @@ package database
 import (
 	"log"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/forceu/gokapi/internal/configuration/database/dbabstraction"
 	"github.com/forceu/gokapi/internal/configuration/database/dbcache"
+	"github.com/forceu/gokapi/internal/helper"
 	"github.com/forceu/gokapi/internal/models"
 	"github.com/forceu/gokapi/internal/test"
 )
@@ -172,6 +174,175 @@ func TestSessions(t *testing.T) {
 		_, ok := GetSession("session3")
 		return ok
 	}, true)
+}
+
+func TestSessionRotation(t *testing.T) {
+	// Start and end from a clean session table, as test directory cleanup may
+	// not remove an open SQLite database on every platform
+	DeleteAllSessions()
+	defer DeleteAllSessions()
+	dueSession := models.Session{
+		RenewAt:    0,
+		ValidUntil: time.Now().Add(time.Hour).Unix(),
+		UserId:     99,
+	}
+
+	// Basic rotation: single successor, old id gone, pointer resolves to successor
+	runAllTypesNoOutput(t, func() {
+		SaveSession("rot_basic", dueSession)
+		successor, ok := RotateSession("rot_basic", "rot_basic_new", dueSession)
+		test.IsEqualBool(t, ok, true)
+		test.IsEqualString(t, successor, "rot_basic_new")
+		_, ok = GetSession("rot_basic")
+		test.IsEqualBool(t, ok, false)
+		newSession, ok := GetSession("rot_basic_new")
+		test.IsEqualBool(t, ok, true)
+		test.IsEqualInt(t, newSession.UserId, 99)
+		followId, _, ok := GetSessionSuccessor("rot_basic")
+		test.IsEqualBool(t, ok, true)
+		test.IsEqualString(t, followId, "rot_basic_new")
+	})
+
+	// Rotating a non-existing session must fail without creating a successor
+	runAllTypesNoOutput(t, func() {
+		successor, ok := RotateSession("rot_missing", "rot_missing_new", dueSession)
+		test.IsEqualBool(t, ok, false)
+		test.IsEmpty(t, successor)
+		_, ok = GetSession("rot_missing_new")
+		test.IsEqualBool(t, ok, false)
+	})
+
+	// Revocation before rotation: a late renewal must not recreate a session
+	runAllTypesNoOutput(t, func() {
+		SaveSession("rot_revoked", dueSession)
+		DeleteSession("rot_revoked")
+		successor, ok := RotateSession("rot_revoked", "rot_revoked_new", dueSession)
+		test.IsEqualBool(t, ok, false)
+		test.IsEmpty(t, successor)
+		_, ok = GetSession("rot_revoked_new")
+		test.IsEqualBool(t, ok, false)
+	})
+
+	// Revocation after rotation via the old id must delete the successor as well
+	runAllTypesNoOutput(t, func() {
+		SaveSession("rot_logout", dueSession)
+		successor, ok := RotateSession("rot_logout", "rot_logout_new", dueSession)
+		test.IsEqualBool(t, ok, true)
+		DeleteSession("rot_logout")
+		_, ok = GetSession(successor)
+		test.IsEqualBool(t, ok, false)
+		_, _, ok = GetSessionSuccessor("rot_logout")
+		test.IsEqualBool(t, ok, false)
+	})
+
+	// Revocation via the successor id directly must invalidate the pointer too
+	runAllTypesNoOutput(t, func() {
+		SaveSession("rot_logout2", dueSession)
+		successor, ok := RotateSession("rot_logout2", "rot_logout2_new", dueSession)
+		test.IsEqualBool(t, ok, true)
+		DeleteSession(successor)
+		_, _, ok = GetSessionSuccessor("rot_logout2")
+		test.IsEqualBool(t, ok, false)
+	})
+
+	// Multi-hop chains are followed and deleted entirely
+	runAllTypesNoOutput(t, func() {
+		SaveSession("rot_chain_a", dueSession)
+		RotateSession("rot_chain_a", "rot_chain_b", dueSession)
+		RotateSession("rot_chain_b", "rot_chain_c", dueSession)
+		followId, _, ok := GetSessionSuccessor("rot_chain_a")
+		test.IsEqualBool(t, ok, true)
+		test.IsEqualString(t, followId, "rot_chain_c")
+		DeleteSession("rot_chain_a")
+		_, ok = GetSession("rot_chain_c")
+		test.IsEqualBool(t, ok, false)
+		_, _, ok = GetSessionSuccessor("rot_chain_b")
+		test.IsEqualBool(t, ok, false)
+	})
+
+	// DeleteAllSessions must remove successors and rotation records
+	runAllTypesNoOutput(t, func() {
+		SaveSession("rot_all", dueSession)
+		RotateSession("rot_all", "rot_all_new", dueSession)
+		DeleteAllSessions()
+		_, ok := GetSession("rot_all_new")
+		test.IsEqualBool(t, ok, false)
+		_, _, ok = GetSessionSuccessor("rot_all")
+		test.IsEqualBool(t, ok, false)
+	})
+
+	// DeleteAllSessionsByUser must invalidate successors of the user, and a
+	// renewal running afterwards must not recreate a session
+	runAllTypesNoOutput(t, func() {
+		userSession := dueSession
+		userSession.UserId = 77
+		SaveSession("rot_user", userSession)
+		RotateSession("rot_user", "rot_user_new", userSession)
+		DeleteAllSessionsByUser(77)
+		_, ok := GetSession("rot_user_new")
+		test.IsEqualBool(t, ok, false)
+		_, _, ok = GetSessionSuccessor("rot_user")
+		test.IsEqualBool(t, ok, false)
+
+		SaveSession("rot_user2", userSession)
+		DeleteAllSessionsByUser(77)
+		successor, ok := RotateSession("rot_user2", "rot_user2_new", userSession)
+		test.IsEqualBool(t, ok, false)
+		test.IsEmpty(t, successor)
+
+		// sessions of other users are untouched
+		SaveSession("rot_other", dueSession)
+		_, ok = GetSession("rot_other")
+		test.IsEqualBool(t, ok, true)
+		DeleteSession("rot_other")
+	})
+
+	// Concurrent rotations of the same old id must result in exactly one successor
+	runAllTypesNoOutput(t, func() {
+		SaveSession("rot_concurrent", dueSession)
+		const count = 25
+		candidates := make([]string, count)
+		for i := range candidates {
+			candidates[i] = helper.GenerateRandomString(40)
+		}
+		results := make([]string, count)
+		oks := make([]bool, count)
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for i := 0; i < count; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				results[i], oks[i] = RotateSession("rot_concurrent", candidates[i], dueSession)
+			}(i)
+		}
+		close(start)
+		wg.Wait()
+
+		winner := ""
+		for i := 0; i < count; i++ {
+			test.IsEqualBool(t, oks[i], true)
+			test.IsNotEmpty(t, results[i])
+			if winner == "" {
+				winner = results[i]
+			}
+			test.IsEqualString(t, results[i], winner)
+		}
+		existingCandidates := 0
+		for _, candidate := range candidates {
+			if _, ok := GetSession(candidate); ok {
+				existingCandidates++
+			}
+		}
+		test.IsEqualInt(t, existingCandidates, 1)
+		_, ok := GetSession("rot_concurrent")
+		test.IsEqualBool(t, ok, false)
+		followId, _, ok := GetSessionSuccessor("rot_concurrent")
+		test.IsEqualBool(t, ok, true)
+		test.IsEqualString(t, followId, winner)
+		DeleteSession("rot_concurrent")
+	})
 }
 
 func TestHotlinks(t *testing.T) {

@@ -243,7 +243,22 @@ func SaveSession(id string, session models.Session) {
 	db.SaveSession(id, session)
 }
 
-// DeleteSession deletes a session with the given ID
+// RotateSession atomically replaces oldId with a single successor. Concurrent
+// calls for the same oldId receive the ID of the same existing successor.
+// Returns false if the old session does not exist anymore (revoked/expired),
+// in which case no new session is created.
+func RotateSession(oldId string, newId string, session models.Session) (string, bool) {
+	return db.RotateSession(oldId, newId, session)
+}
+
+// GetSessionSuccessor returns the valid successor for an ID that was replaced
+// during a session rotation
+func GetSessionSuccessor(oldId string) (string, models.Session, bool) {
+	return db.GetSessionSuccessor(oldId)
+}
+
+// DeleteSession deletes a session with the given ID. If the session was
+// rotated, its successor chain is deleted as well.
 func DeleteSession(id string) {
 	db.DeleteSession(id)
 }
