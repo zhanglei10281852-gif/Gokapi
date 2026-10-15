@@ -99,6 +99,7 @@ func Migrate(configOld, configNew models.DbConnection) {
 // RunGarbageCollection runs the databases GC
 func RunGarbageCollection() {
 	db.RunGarbageCollection()
+	db.DeleteExpiredChunkReservations()
 }
 
 var osExit = os.Exit

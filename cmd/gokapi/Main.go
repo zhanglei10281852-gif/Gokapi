@@ -58,6 +58,8 @@ func main() {
 	configuration.Load()
 	if !reconfigureServer(passedFlags) {
 		configuration.ConnectDatabase()
+		// Share chunk reservations between instances and reclaim expired ones
+		database.InitChunkReservationStore()
 	}
 
 	setDeploymentPassword(passedFlags)

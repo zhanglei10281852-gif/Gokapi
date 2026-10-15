@@ -1,0 +1,19 @@
+rubrics:
+  - id: 1
+    type: f2p
+    text: 有限 MaxFiles 下并发 reserve 不能接受超过剩余配额的预约。
+  - id: 2
+    type: f2p
+    text: reserve、add 和 complete 由不同实例处理或节点重启后，未过期 UUID 仍可继续且不会重复占用名额。
+  - id: 3
+    type: f2p
+    text: 成功、取消、上传失败和超时分别收敛预约，重复或迟到的 complete 或 unreserve 不会二次释放或改变已完成结果。
+  - id: 4
+    type: f2p
+    text: 重启不会丢失有效预约，过期预约会被确定回收且旧 UUID 不可复活。
+  - id: 5
+    type: f2p
+    text: FilesRemaining、ReservedUploads 与管理输出统一按已完成文件加有效预约计算。
+  - id: 6
+    type: p2p
+    text: MaxFiles 为零的请求、普通非 File Request 上传及既有单实例成功流程不回归。

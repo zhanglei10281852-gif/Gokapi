@@ -10,6 +10,7 @@ import (
 	"github.com/forceu/gokapi/internal/configuration/database/dbabstraction"
 	"github.com/forceu/gokapi/internal/configuration/database/dbcache"
 	"github.com/forceu/gokapi/internal/models"
+	"github.com/forceu/gokapi/internal/storage/chunking/chunkreservation"
 	"github.com/forceu/gokapi/internal/test"
 )
 
@@ -367,6 +368,150 @@ func TestUpgrade(t *testing.T) {
 
 func TestRunGarbageCollection(t *testing.T) {
 	runAllTypesNoOutput(t, func() { RunGarbageCollection() })
+}
+
+func TestChunkReservations(t *testing.T) {
+	const (
+		requestId  = "testres"
+		requestId2 = "testres2"
+		requestId3 = "testres3"
+		requestId4 = "testres4"
+		requestId5 = "testres5"
+		requestId6 = "testres6"
+		fileId     = "testres-file"
+		fileId2    = "testres-file2"
+	)
+	now := time.Now().Unix()
+	future := now + 1000
+	past := now - 1000
+
+	runAllTypesNoOutput(t, func() {
+		for _, id := range []string{requestId, requestId2, requestId3, requestId4, requestId5, requestId6} {
+			DeleteAllChunkReservations(id)
+		}
+		DeleteMetaData(fileId)
+		DeleteMetaData(fileId2)
+	})
+
+	// Empty requests have no reservations
+	runAllTypesCompareOutput(t, func() any { return CountActiveChunkReservations(requestId) }, 0)
+
+	// Unlimited reservations are always accepted
+	runAllTypesCompareOutput(t, func() any { return CreateChunkReservation(requestId, "u1", future, 0) }, true)
+	runAllTypesCompareOutput(t, func() any { return CountActiveChunkReservations(requestId) }, 1)
+
+	// Limited reservations share the quota: the last slot can only be claimed once
+	runAllTypesCompareOutput(t, func() any { return CreateChunkReservation(requestId2, "u2a", future, 1) }, true)
+	runAllTypesCompareOutput(t, func() any { return CreateChunkReservation(requestId2, "u2b", future, 1) }, false)
+	runAllTypesCompareOutput(t, func() any { return CountActiveChunkReservations(requestId2) }, 1)
+
+	// A completed file counts against the same quota as a valid reservation
+	file := models.File{
+		Id:                 fileId,
+		Name:               "Testname",
+		Size:               "1 B",
+		SHA1:               "ressha1",
+		ContentType:        "none",
+		ExpireAt:           future,
+		UploadDate:         now,
+		SizeBytes:          1,
+		UnlimitedDownloads: true,
+		UnlimitedTime:      true,
+		UploadRequestId:    requestId2,
+	}
+	runAllTypesNoOutput(t, func() { SaveMetaData(file) })
+	runAllTypesNoOutput(t, func() { ReleaseChunkReservation(requestId2, "u2a") })
+	runAllTypesCompareOutput(t, func() any { return CreateChunkReservation(requestId2, "u2c", future, 1) }, false)
+	// Removing the file frees the quota slot again
+	runAllTypesNoOutput(t, func() { DeleteMetaData(fileId) })
+	runAllTypesCompareOutput(t, func() any { return CreateChunkReservation(requestId2, "u2c", future, 1) }, true)
+
+	// SetUploading validates the reservation and extends its lifetime
+	runAllTypesCompareOutput(t, func() any { return SetChunkReservationUploading(requestId2, "u2c", future+100) }, true)
+	runAllTypesCompareOutput(t, func() any { return SetChunkReservationUploading(requestId2, "unknown", future+100) }, false)
+	runAllTypesCompareOutput(t, func() any { return CreateChunkReservation(requestId2, "u2d", past, 0) }, true)
+	runAllTypesCompareOutput(t, func() any { return SetChunkReservationUploading(requestId2, "u2d", future) }, false)
+	runAllTypesCompareOutput(t, func() any { return CountActiveChunkReservations(requestId2) }, 1)
+
+	// Completing is idempotent and stores the created file id
+	runAllTypesCompareTwoOutputs(t, func() (any, any) {
+		return FinaliseChunkReservation(requestId2, "u2c", "file-1", future)
+	}, "", true)
+	runAllTypesCompareTwoOutputs(t, func() (any, any) {
+		return GetFinalisedChunkReservation(requestId2, "u2c")
+	}, "file-1", true)
+	runAllTypesCompareTwoOutputs(t, func() (any, any) {
+		return FinaliseChunkReservation(requestId2, "u2c", "file-2", future)
+	}, "file-1", true)
+	runAllTypesCompareOutput(t, func() any { return CountActiveChunkReservations(requestId2) }, 0)
+
+	// Release happens once and is safe to repeat
+	runAllTypesNoOutput(t, func() { ReleaseChunkReservation(requestId2, "u2c") })
+	runAllTypesNoOutput(t, func() { ReleaseChunkReservation(requestId2, "u2c") })
+	runAllTypesCompareTwoOutputs(t, func() (any, any) {
+		return GetFinalisedChunkReservation(requestId2, "u2c")
+	}, "", false)
+
+	// Expired reservations are reclaimed
+	runAllTypesCompareOutput(t, func() any { return CreateChunkReservation(requestId3, "expired", past, 0) }, true)
+	runAllTypesNoOutput(t, func() { DeleteExpiredChunkReservations() })
+	runAllTypesCompareOutput(t, func() any { return CountActiveChunkReservations(requestId3) }, 0)
+
+	// Deleting the file request removes all of its reservations
+	runAllTypesCompareOutput(t, func() any { return CreateChunkReservation(requestId4, "u4", future, 0) }, true)
+	runAllTypesNoOutput(t, func() {
+		SaveFileRequest(models.FileRequest{Id: requestId4, Name: "t", UserId: 1, ApiKey: "apikey-res-4", CreationDate: now})
+		DeleteFileRequest(models.FileRequest{Id: requestId4})
+		DeleteApiKey("apikey-res-4")
+	})
+	runAllTypesCompareOutput(t, func() any { return CountActiveChunkReservations(requestId4) }, 0)
+
+	// Files pending for deletion no longer occupy quota (both providers must agree)
+	file2 := file
+	file2.Id = fileId2
+	file2.SHA1 = "ressha2"
+	file2.UploadRequestId = requestId6
+	runAllTypesNoOutput(t, func() { SaveMetaData(file2) })
+	runAllTypesCompareOutput(t, func() any { return CreateChunkReservation(requestId6, "u6a", future, 1) }, false)
+	file2.PendingDeletion = future
+	runAllTypesNoOutput(t, func() { SaveMetaData(file2) })
+	runAllTypesCompareOutput(t, func() any { return CreateChunkReservation(requestId6, "u6a", future, 1) }, true)
+	file2.PendingDeletion = 0
+	runAllTypesNoOutput(t, func() { SaveMetaData(file2) })
+	runAllTypesCompareOutput(t, func() any { return CreateChunkReservation(requestId6, "u6b", future, 1) }, false)
+	runAllTypesNoOutput(t, func() {
+		DeleteMetaData(fileId2)
+		ReleaseChunkReservation(requestId6, "u6a")
+	})
+
+	// Integration with the chunkreservation package and models.Populate
+	runAllTypesNoOutput(t, func() {
+		chunkreservation.SetStore(dbReservationStore{})
+		defer chunkreservation.SetStore(nil)
+		uuid, ok := chunkreservation.TryNew(requestId5, 1, 0)
+		test.IsNotEmpty(t, uuid)
+		test.IsEqualBool(t, ok, true)
+		_, ok = chunkreservation.TryNew(requestId5, 1, 0)
+		test.IsEqualBool(t, ok, false)
+		test.IsEqualInt(t, chunkreservation.GetCount(requestId5), 1)
+		test.IsEqualBool(t, chunkreservation.SetUploading(requestId5, uuid), true)
+		duplicate, ok := chunkreservation.Finalise(requestId5, uuid, "completed-file")
+		test.IsEqualBool(t, ok, true)
+		test.IsEqualString(t, duplicate, "")
+		duplicate, ok = chunkreservation.Finalise(requestId5, uuid, "completed-file")
+		test.IsEqualBool(t, ok, true)
+		test.IsEqualString(t, duplicate, "completed-file")
+		fr := models.FileRequest{Id: requestId5, MaxFiles: 1}
+		fr.Populate(GetAllMetadata(), 1000)
+		test.IsEqualInt(t, fr.ReservedUploads, 0)
+		chunkreservation.SetComplete(requestId5, uuid)
+	})
+
+	runAllTypesNoOutput(t, func() {
+		for _, id := range []string{requestId, requestId2, requestId3, requestId4, requestId5, requestId6} {
+			DeleteAllChunkReservations(id)
+		}
+	})
 }
 
 func TestClose(t *testing.T) {

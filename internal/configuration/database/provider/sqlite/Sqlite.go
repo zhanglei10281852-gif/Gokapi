@@ -22,7 +22,7 @@ type DatabaseProvider struct {
 }
 
 // DatabaseSchemeVersion contains the version number to be expected from the current database. If lower, an upgrade will be performed
-const DatabaseSchemeVersion = 15
+const DatabaseSchemeVersion = 16
 
 // New returns an instance
 func New(dbConfig models.DbConnection) (DatabaseProvider, error) {
@@ -113,6 +113,19 @@ func (p DatabaseProvider) Upgrade(currentDbVersion int) {
 	// < v2.2.5
 	if currentDbVersion < 15 {
 		p.DeleteAllSessions()
+	}
+	// Chunk upload reservations are shared across instances and survive restarts
+	if currentDbVersion < 16 {
+		err := p.rawSqlite(`CREATE TABLE "ChunkReservations" (
+			"UploadRequestId"	TEXT NOT NULL,
+			"Uuid"	TEXT NOT NULL,
+			"Expiry"	INTEGER NOT NULL,
+			"Status"	INTEGER NOT NULL DEFAULT 0,
+			"FileId"	TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY("UploadRequestId","Uuid")
+		) WITHOUT ROWID;
+		CREATE INDEX "Idx_ChunkReservations_Expiry" ON "ChunkReservations" ("Expiry");`)
+		helper.Check(err)
 	}
 }
 
@@ -266,7 +279,16 @@ func (p DatabaseProvider) createNewDatabase() error {
 				"type"	INTEGER NOT NULL UNIQUE,
 				"value"	INTEGER,
 				PRIMARY KEY("id" AUTOINCREMENT)
-			);`
+			);
+		CREATE TABLE "ChunkReservations" (
+			"UploadRequestId"	TEXT NOT NULL,
+			"Uuid"	TEXT NOT NULL,
+			"Expiry"	INTEGER NOT NULL,
+			"Status"	INTEGER NOT NULL DEFAULT 0,
+			"FileId"	TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY("UploadRequestId","Uuid")
+		) WITHOUT ROWID;
+		CREATE INDEX "Idx_ChunkReservations_Expiry" ON "ChunkReservations" ("Expiry");`
 	err := p.rawSqlite(sqlStmt)
 	if err != nil {
 		return err

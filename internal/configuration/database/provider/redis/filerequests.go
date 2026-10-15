@@ -65,5 +65,6 @@ func (p DatabaseProvider) SaveFileRequest(request models.FileRequest) {
 
 // DeleteFileRequest deletes a file request with the given ID
 func (p DatabaseProvider) DeleteFileRequest(request models.FileRequest) {
+	p.DeleteAllChunkReservations(request.Id)
 	p.deleteKey(prefixFileRequests + request.Id)
 }

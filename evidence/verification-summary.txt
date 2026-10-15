@@ -1,0 +1,7 @@
+completionStatus=部分完成
+collectionDecision=收录：长程题
+rounds=105 harness=Trae source=count-trae-cn-steps.py scope=latest_turn warnings=[]
+duration=3009 seconds exceededTwoHours=否 source=trae-session-realtime-duration
+go test -count=1 --tags=test,noaws ./internal/storage/chunking/chunkreservation => PASS
+go test -count=1 --tags=test,noaws ./internal/configuration/database -run TestInit|TestChunkReservation => PASS
+确定失败交错：成功 Finalise 后 apiChunkUnreserve 调用 SetComplete；Release 删除 finalised 记录；后续 duplicate complete 无法读取原文件 ID。

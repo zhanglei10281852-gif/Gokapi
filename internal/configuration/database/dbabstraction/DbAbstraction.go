@@ -109,6 +109,28 @@ type Database interface {
 	// DeleteFileRequest deletes a file request with the given ID
 	DeleteFileRequest(request models.FileRequest)
 
+	// CreateChunkReservation stores a reservation for an upcoming chunk upload.
+	// If maxFiles is greater than zero, the creation is atomic and fails when the
+	// number of completed uploads and valid reservations has reached maxFiles.
+	CreateChunkReservation(requestId, uuid string, expiry int64, maxFiles int) bool
+	// SetChunkReservationUploading marks a reservation as uploading and extends its expiry.
+	// It returns false if no active, unexpired reservation exists.
+	SetChunkReservationUploading(requestId, uuid string, newExpiry int64) bool
+	// ReleaseChunkReservation removes a reservation. It is idempotent.
+	ReleaseChunkReservation(requestId, uuid string)
+	// FinaliseChunkReservation marks a reservation as completed and stores the
+	// created file ID. If the reservation was already finalised, the stored file
+	// ID is returned as duplicateFileId. ok is false when no valid reservation exists.
+	FinaliseChunkReservation(requestId, uuid, fileId string, expiry int64) (duplicateFileId string, ok bool)
+	// GetFinalisedChunkReservation returns the file ID of a finalised, unexpired reservation
+	GetFinalisedChunkReservation(requestId, uuid string) (fileId string, ok bool)
+	// CountActiveChunkReservations returns the number of active, unexpired reservations
+	CountActiveChunkReservations(requestId string) int
+	// DeleteAllChunkReservations removes all reservations associated with a file request
+	DeleteAllChunkReservations(requestId string)
+	// DeleteExpiredChunkReservations reclaims all reservations that have expired
+	DeleteExpiredChunkReservations()
+
 	// GetStatTraffic returns the total traffic from statistics
 	GetStatTraffic() uint64
 	// SaveStatTraffic stores the total traffic

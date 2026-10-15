@@ -80,10 +80,22 @@ func (p DatabaseProvider) SaveMetaData(file models.File) {
 	marshalledFile, err := marshalEncryptionInfo(file)
 	helper.Check(err)
 	p.setHashMap(p.buildArgs(prefixMetaData + file.Id).AddFlat(marshalledFile))
+	// Only files that are not pending for deletion count against the file
+	// request quota, matching the SQLite predicate
+	if file.UploadRequestId != "" {
+		if file.IsPendingForDeletion() {
+			p.removeRequestFile(file.UploadRequestId, file.Id)
+		} else {
+			p.addRequestFile(file.UploadRequestId, file.Id)
+		}
+	}
 }
 
 // DeleteMetaData deletes information about a file
 func (p DatabaseProvider) DeleteMetaData(id string) {
+	if file, ok := p.GetMetaDataById(id); ok {
+		p.removeRequestFile(file.UploadRequestId, file.Id)
+	}
 	p.deleteKey(prefixMetaData + id)
 }
 

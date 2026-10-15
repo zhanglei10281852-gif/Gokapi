@@ -96,6 +96,10 @@ func ProcessNewChunk(w http.ResponseWriter, r *http.Request, isApiCall bool, fil
 	err = chunking.NewChunk(file, header, chunkInfo, maxFileSize)
 	defer file.Close()
 	if err != nil {
+		if filerequestId != "" {
+			// The upload failed permanently, release its quota slot exactly once
+			chunkreservation.SetComplete(filerequestId, chunkInfo.UUID)
+		}
 		return errorcodes.CannotAllocateFile, err
 	}
 	_, _ = io.WriteString(w, "{\"result\":\"OK\"}")

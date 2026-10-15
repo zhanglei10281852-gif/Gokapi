@@ -102,6 +102,7 @@ func (p DatabaseProvider) DeleteFileRequest(request models.FileRequest) {
 	if request.Id == "" {
 		return
 	}
+	p.DeleteAllChunkReservations(request.Id)
 	_, err := p.sqliteDb.Exec("DELETE FROM UploadRequests WHERE Id = ?", request.Id)
 	helper.Check(err)
 }

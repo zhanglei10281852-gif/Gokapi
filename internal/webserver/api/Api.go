@@ -391,15 +391,23 @@ func apiChunkReserve(w http.ResponseWriter, r requestParser, _ models.User, apik
 		sendError(w, status, errorCode, errorMsg)
 		return
 	}
-	if fileRequest.FilesRemaining() <= 0 && !fileRequest.IsUnlimitedFiles() {
-		sendError(w, http.StatusBadRequest, errorcodes.CannotUploadMoreFiles, "No more files can be uploaded for this file request")
-		return
+	var uuid string
+	if fileRequest.IsUnlimitedFiles() {
+		if !ratelimiter.IsAllowedNewUuid(fileRequest.Id) {
+			sendError(w, http.StatusTooManyRequests, errorcodes.RateLimited, "Too many reservations for this file request. Please wait a few seconds before reserving a new uuid.")
+			return
+		}
+		uuid = chunkreservation.New(fileRequest.Id)
+	} else {
+		// The quota check and the creation are atomic, so the last available
+		// slot is granted to at most one concurrent reservation
+		var reserved bool
+		uuid, reserved = chunkreservation.TryNew(fileRequest.Id, fileRequest.MaxFiles, fileRequest.UploadedFiles)
+		if !reserved {
+			sendError(w, http.StatusBadRequest, errorcodes.CannotUploadMoreFiles, "No more files can be uploaded for this file request")
+			return
+		}
 	}
-	if fileRequest.IsUnlimitedFiles() && !ratelimiter.IsAllowedNewUuid(fileRequest.Id) {
-		sendError(w, http.StatusTooManyRequests, errorcodes.RateLimited, "Too many reservations for this file request. Please wait a few seconds before reserving a new uuid.")
-		return
-	}
-	uuid := chunkreservation.New(fileRequest.Id)
 	result, err := json.Marshal(struct {
 		Result string `json:"Result"`
 		Uuid   string `json:"Uuid"`
@@ -503,15 +511,37 @@ func apiChunkComplete(w http.ResponseWriter, r requestParser, user models.User, 
 
 func doBlockingPartCompleteChunk(w http.ResponseWriter, uuid string, fileHeader chunking.FileHeader, user models.User, uploadParameters models.UploadParameters) {
 	file, err := fileupload.CompleteChunk(uuid, fileHeader, user.Id, uploadParameters)
+	fileRequestId := uploadParameters.FileRequestId
 	if err != nil {
+		if fileRequestId != "" {
+			// A duplicate or late completion after a previous success is
+			// answered idempotently with the already created file
+			if existingFileId, finalised := chunkreservation.GetFinalised(fileRequestId, uuid); finalised {
+				if existingFile, ok := database.GetMetaDataById(existingFileId); ok {
+					outputFileJson(w, existingFile)
+					return
+				}
+			}
+			// Genuine failure: release the reserved quota slot exactly once
+			chunkreservation.SetComplete(fileRequestId, uuid)
+		}
 		_ = chunking.DeleteChunk(uuid)
 		sendError(w, http.StatusBadRequest, errorcodes.UnspecifiedError, err.Error())
 		return
 	}
-	if uploadParameters.FileRequestId != "" {
-		chunkreservation.SetComplete(uploadParameters.FileRequestId, uuid)
+	if fileRequestId != "" {
+		// Finalise retains the reservation until it expires so that a
+		// duplicate or late completion can be answered idempotently. If the
+		// reservation was already finalised, return the existing file instead
+		// of creating a duplicate result.
+		if duplicateFileId, _ := chunkreservation.Finalise(fileRequestId, uuid, file.Id); duplicateFileId != "" {
+			if existingFile, ok := database.GetMetaDataById(duplicateFileId); ok {
+				outputFileJson(w, existingFile)
+				return
+			}
+		}
 	}
-	fr, _ := filerequest.Get(uploadParameters.FileRequestId)
+	fr, _ := filerequest.Get(fileRequestId)
 	logging.LogUpload(file, user, fr)
 	outputFileJson(w, file)
 }

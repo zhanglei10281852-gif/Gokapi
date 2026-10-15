@@ -21,7 +21,7 @@ type DatabaseProvider struct {
 }
 
 // DatabaseSchemeVersion contains the version number to be expected from the current database. If lower, an upgrade will be performed
-const DatabaseSchemeVersion = 8
+const DatabaseSchemeVersion = 9
 
 // New returns an instance
 func New(dbConfig models.DbConnection) (DatabaseProvider, error) {
@@ -161,6 +161,20 @@ func (p DatabaseProvider) Upgrade(currentDbVersion int) {
 	// < v2.2.5
 	if currentDbVersion < 8 {
 		p.DeleteAllSessions()
+	}
+	// Backfill the per-request completed-file index used by the shared
+	// chunk reservation quota
+	if currentDbVersion < 9 {
+		for key, hashMap := range p.getAllHashesWithPrefix(prefixMetaData) {
+			file, err := dbToMetadata(key, hashMap)
+			if err != nil {
+				helper.Check(err)
+				continue
+			}
+			if file.UploadRequestId != "" && !file.IsPendingForDeletion() {
+				p.addRequestFile(file.UploadRequestId, file.Id)
+			}
+		}
 	}
 }
 
