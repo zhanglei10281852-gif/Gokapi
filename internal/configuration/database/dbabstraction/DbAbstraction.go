@@ -111,10 +111,17 @@ type Database interface {
 
 	// GetStatTraffic returns the total traffic from statistics
 	GetStatTraffic() uint64
-	// SaveStatTraffic stores the total traffic
-	SaveStatTraffic(totalTraffic uint64)
-	// SaveTrafficSince stores the beginning of traffic counting
-	SaveTrafficSince(since int64)
+	// AddStatTraffic atomically adds the given amount of traffic, but only if the
+	// stored beginning of traffic counting equals expectedSince. If it differs
+	// (because the statistics were reset by another node), the amount is discarded.
+	// It returns the stored total and the stored beginning of counting
+	AddStatTraffic(addedTraffic uint64, expectedSince int64) (uint64, int64)
+	// ResetStatTraffic atomically sets the total traffic to zero and the beginning
+	// of traffic counting to the given value
+	ResetStatTraffic(since int64)
+	// InitTrafficSince stores the beginning of traffic counting if it has not been
+	// stored yet and returns the value that is currently stored
+	InitTrafficSince(since int64) int64
 	// GetTrafficSince gets the beginning of traffic counting
 	GetTrafficSince() (int64, bool)
 }

@@ -365,14 +365,24 @@ func GetStatTraffic() uint64 {
 	return db.GetStatTraffic()
 }
 
-// SaveStatTraffic stores the total traffic
-func SaveStatTraffic(totalTraffic uint64) {
-	db.SaveStatTraffic(totalTraffic)
+// AddStatTraffic atomically adds the given amount of traffic, but only if the
+// stored beginning of traffic counting equals expectedSince. If it differs
+// (because the statistics were reset by another node), the amount is discarded.
+// It returns the stored total and the stored beginning of counting
+func AddStatTraffic(addedTraffic uint64, expectedSince int64) (uint64, int64) {
+	return db.AddStatTraffic(addedTraffic, expectedSince)
 }
 
-// SaveTrafficSince stores the beginning of traffic counting
-func SaveTrafficSince(since int64) {
-	db.SaveTrafficSince(since)
+// ResetStatTraffic atomically sets the total traffic to zero and the beginning
+// of traffic counting to the given value
+func ResetStatTraffic(since int64) {
+	db.ResetStatTraffic(since)
+}
+
+// InitTrafficSince stores the beginning of traffic counting if it has not been
+// stored yet and returns the value that is currently stored
+func InitTrafficSince(since int64) int64 {
+	return db.InitTrafficSince(since)
 }
 
 // GetTrafficSince gets the beginning of traffic counting

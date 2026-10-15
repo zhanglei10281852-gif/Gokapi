@@ -3,6 +3,7 @@ package database
 import (
 	"log"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -367,6 +368,65 @@ func TestUpgrade(t *testing.T) {
 
 func TestRunGarbageCollection(t *testing.T) {
 	runAllTypesNoOutput(t, func() { RunGarbageCollection() })
+}
+
+func TestStatistics(t *testing.T) {
+	runAllTypesNoOutput(t, func() {
+		ResetStatTraffic(5000)
+		test.IsEqual(t, GetStatTraffic(), uint64(0))
+
+		total, since := AddStatTraffic(100, 5000)
+		test.IsEqual(t, total, uint64(100))
+		test.IsEqualInt64(t, since, 5000)
+		total, since = AddStatTraffic(50, 5000)
+		test.IsEqual(t, total, uint64(150))
+		test.IsEqualInt64(t, since, 5000)
+
+		// Increments for an outdated epoch are discarded
+		total, since = AddStatTraffic(999, 4999)
+		test.IsEqual(t, total, uint64(150))
+		test.IsEqualInt64(t, since, 5000)
+		test.IsEqual(t, GetStatTraffic(), uint64(150))
+
+		ResetStatTraffic(6000)
+		test.IsEqual(t, GetStatTraffic(), uint64(0))
+		since, ok := GetTrafficSince()
+		test.IsEqualBool(t, ok, true)
+		test.IsEqualInt64(t, since, 6000)
+
+		total, since = AddStatTraffic(70, 6000)
+		test.IsEqual(t, total, uint64(70))
+		test.IsEqualInt64(t, since, 6000)
+	})
+}
+
+func TestConcurrentTrafficAdds(t *testing.T) {
+	runAllTypesNoOutput(t, func() {
+		ResetStatTraffic(7000)
+		const concurrentAdds = 50
+		var wg sync.WaitGroup
+		for i := 0; i < concurrentAdds; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, _ = AddStatTraffic(10, 7000)
+			}()
+		}
+		wg.Wait()
+		test.IsEqual(t, GetStatTraffic(), uint64(concurrentAdds*10))
+
+		// An increment for a stale epoch must remain a no-op under contention
+		var wgStale sync.WaitGroup
+		for i := 0; i < concurrentAdds; i++ {
+			wgStale.Add(1)
+			go func() {
+				defer wgStale.Done()
+				_, _ = AddStatTraffic(10, 6999)
+			}()
+		}
+		wgStale.Wait()
+		test.IsEqual(t, GetStatTraffic(), uint64(concurrentAdds*10))
+	})
 }
 
 func TestClose(t *testing.T) {

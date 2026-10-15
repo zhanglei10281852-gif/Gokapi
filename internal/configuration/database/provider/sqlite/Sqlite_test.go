@@ -696,3 +696,48 @@ func TestRawSql(t *testing.T) {
 	defer test.ExpectPanic(t)
 	_ = dbInstance.rawSqlite("Select * from Sessions")
 }
+
+func TestStatistics(t *testing.T) {
+	instance, err := New(models.DbConnection{
+		HostUrl: "./test/newfolder/gokapi_stats.sqlite",
+		Type:    0, // dbabstraction.TypeSqlite
+	})
+	test.IsNil(t, err)
+	defer instance.Close()
+
+	// Fresh database: no epoch stored yet
+	_, ok := instance.GetTrafficSince()
+	test.IsEqualBool(t, ok, false)
+
+	// The first recorded increment creates the epoch
+	total, since := instance.AddStatTraffic(100, 1111)
+	test.IsEqual(t, total, uint64(100))
+	test.IsEqualInt64(t, since, 1111)
+
+	// InitTrafficSince must not overwrite an existing epoch
+	test.IsEqualInt64(t, instance.InitTrafficSince(2222), 1111)
+	total, since = instance.AddStatTraffic(50, 1111)
+	test.IsEqual(t, total, uint64(150))
+	test.IsEqualInt64(t, since, 1111)
+
+	// Increments attributed to an outdated epoch are discarded
+	total, since = instance.AddStatTraffic(999, 1000)
+	test.IsEqual(t, total, uint64(150))
+	test.IsEqualInt64(t, since, 1111)
+	test.IsEqual(t, instance.GetStatTraffic(), uint64(150))
+
+	// The reset atomically zeroes the total and sets a new epoch
+	instance.ResetStatTraffic(3333)
+	test.IsEqual(t, instance.GetStatTraffic(), uint64(0))
+	since, ok = instance.GetTrafficSince()
+	test.IsEqualBool(t, ok, true)
+	test.IsEqualInt64(t, since, 3333)
+
+	// Old epoch is rejected after the reset, new epoch accumulates
+	total, since = instance.AddStatTraffic(80, 1111)
+	test.IsEqual(t, total, uint64(0))
+	test.IsEqualInt64(t, since, 3333)
+	total, since = instance.AddStatTraffic(70, 3333)
+	test.IsEqual(t, total, uint64(70))
+	test.IsEqualInt64(t, since, 3333)
+}

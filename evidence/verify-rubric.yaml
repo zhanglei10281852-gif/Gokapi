@@ -1,0 +1,19 @@
+rubrics:
+  - id: 1
+    type: f2p
+    text: 两个或更多实例并发记录下载时，共享 Data Served 等于各节点增量的精确和。
+  - id: 2
+    type: f2p
+    text: 节点交错执行定期保存或优雅关闭，不会用较旧快照覆盖其他节点已经记录的流量。
+  - id: 3
+    type: f2p
+    text: reset 与下载、迟到保存或关闭交错时，重置前流量不会复活，重置后的流量归入新周期。
+  - id: 4
+    type: f2p
+    text: 节点重启后读取共享基线，后续计数不重复、不丢失，recording since 对应当前重置周期。
+  - id: 5
+    type: f2p
+    text: 状态页与 systemstatus API 在不同实例返回同一全局总量和 recording since。
+  - id: 6
+    type: p2p
+    text: 单实例、零流量、现有本地和代理下载计量以及非统计下载行为不回归。

@@ -1,0 +1,7 @@
+completionStatus=部分完成
+collectionDecision=收录：难题
+rounds=68 harness=Trae source=count-trae-cn-steps.py scope=latest_turn warnings=[]
+duration=2470 seconds exceededTwoHours=否 source=trae-session-realtime-duration
+go test -count=1 --tags=test,noaws ./internal/logging/serverstats => PASS
+go test -count=1 --tags=test,noaws ./internal/configuration/database -run TestInit|TestStatistics => PASS
+临时确定性测试 TestReviewerSameEpochResetRevivesOldPending => PASS，证明同 epoch reset 后旧 pending 500 被重新计入；测试文件验证后已删除。

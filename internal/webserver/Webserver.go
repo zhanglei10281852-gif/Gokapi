@@ -202,6 +202,7 @@ func Shutdown() {
 	if err != nil {
 		log.Println(err)
 	}
+	serverstats.Shutdown()
 }
 
 // Initialises the templateFolder variable by scanning through all the templates.
